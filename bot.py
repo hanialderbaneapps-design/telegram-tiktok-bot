@@ -1,88 +1,110 @@
 import os
 import re
-import tempfile
-import subprocess
+import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    Application, CommandHandler, MessageHandler,
-    ContextTypes, filters
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+)
+import yt_dlp
+
+# ====== CONFIG ======
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHANNEL = "@professionalXoX"  # اسم قناتك
+# ====================
+
+# Regex صحيح يقبل كل روابط تيك توك
+TIKTOK_RE = re.compile(
+    r"(https?://)?(www\.)?(tiktok\.com|vt\.tiktok\.com)/\S+",
+    re.IGNORECASE
 )
 
-TOKEN = os.environ["BOT_TOKEN"]
-CHANNEL = "@professionalXoX"  # t.me/professionalXoX
-
-TIKTOK_RE = re.compile(r"(https?://)?(www\.)?(tiktok\.com|vt\.tiktok\.com)/\S+", re.IGNORECASE)
-
-def join_kb():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("اشترك بالقناة أولاً", url=f"https://t.me/{CHANNEL.lstrip('@')}")]
-    ])
-
-async def is_subscribed(bot, user_id: int) -> bool:
+# تحقق من الاشتراك
+async def is_subscribed(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
     try:
-        m = await bot.get_chat_member(CHANNEL, user_id)
-        return m.status in ("member", "administrator", "creator")
-    except Exception:
+        member = await context.bot.get_chat_member(CHANNEL, user_id)
+        return member.status in ("member", "administrator", "creator")
+    except:
         return False
 
-def extract_tiktok_url(text: str) -> str | None:
-    m = TIKTOK_RE.search(text or "")
-    return m.group(0) if m else None
-
+# /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "أرسل رابط تيك توك هنا.\n"
-        "إذا لم تكن مشتركاً بالقناة، سيطلب منك الاشتراك تلقائياً.",
-        reply_markup=join_kb()
+        "أهلاً 👋\nابعت رابط فيديو تيك توك وسأحمله لك بدون علامة مائية."
     )
 
+# الرسائل
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
+    text = update.message.text.strip()
 
-    # 1) تحقق لحظي من الاشتراك (كل مرة)
-    if not await is_subscribed(context.bot, user_id):
+    # تحقق الرابط
+    if not TIKTOK_RE.search(text):
         await update.message.reply_text(
-            "آسف، لازم تشترك بالقناة أولاً ثم أرسل الرابط المراد تحميله.",
-            reply_markup=join_kb()
+            "❌ ابعت رابط تيك توك صحيح\nمثال:\nhttps://vt.tiktok.com/..."
         )
         return
 
-    # 2) استخرج رابط تيك توك
-    url = extract_tiktok_url(update.message.text or "")
-    if not url:
-        await update.message.reply_text("ابعت رابط تيك توك صحيح (مثال: https://vt.tiktok.com/...)")
+    # تحقق الاشتراك
+    if not await is_subscribed(update.effective_user.id, context):
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📢 اشترك بالقناة", url=f"https://t.me/{CHANNEL.lstrip('@')}")],
+            [InlineKeyboardButton("✅ تحقق", callback_data="check_sub")]
+        ])
+        await update.message.reply_text(
+            "⚠️ يجب الاشتراك بالقناة أولاً",
+            reply_markup=keyboard
+        )
         return
 
-    status_msg = await update.message.reply_text("تمام… جاري التحميل ⏳")
+    await update.message.reply_text("⏳ جاري تحميل الفيديو...")
 
-    # 3) تنزيل وإرسال (كما يتيحه المصدر)
-    with tempfile.TemporaryDirectory() as td:
-        outtmpl = os.path.join(td, "video.%(ext)s")
-        cmd = ["yt-dlp", "-o", outtmpl, "-f", "bv*+ba/best", "--no-playlist", url]
+    filename = f"video_{update.effective_user.id}.mp4"
 
-        try:
-            subprocess.run(cmd, check=True, capture_output=True, text=True)
-        except subprocess.CalledProcessError:
-            await status_msg.edit_text("صار خطأ بالتحميل. ممكن الرابط خاص/محمي أو المصدر مانع التنزيل.")
-            return
+    ydl_opts = {
+        "outtmpl": filename,
+        "format": "best",
+        "quiet": True,
+        "noplaylist": True,
+    }
 
-        files = [os.path.join(td, f) for f in os.listdir(td) if f.startswith("video.")]
-        if not files:
-            await status_msg.edit_text("تم التحميل لكن لم أجد الملف الناتج.")
-            return
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([text])
 
-        video_path = files[0]
-        try:
-            await status_msg.edit_text("جاري الإرسال ✅")
-            with open(video_path, "rb") as f:
-                await update.message.reply_document(document=f, filename="tiktok.mp4")
-        except Exception:
-            await status_msg.edit_text("ما قدرت أرسل الملف (ممكن حجمه كبير). جرّب فيديو أقصر.")
+        await update.message.reply_video(
+            video=open(filename, "rb"),
+            caption="✅ تم التحميل بنجاح"
+        )
 
+    except Exception as e:
+        await update.message.reply_text("❌ حدث خطأ أثناء التحميل")
+    finally:
+        if os.path.exists(filename):
+            os.remove(filename)
+
+# تحقق الزر
+async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if await is_subscribed(query.from_user.id, context):
+        await query.edit_message_text("✅ أنت مشترك، ابعت رابط تيك توك الآن")
+    else:
+        await query.answer("❌ لم تشترك بعد", show_alert=True)
+
+# main
 def main():
-    app = Application.builder().token(TOKEN).build()
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(
+        telegram.ext.CallbackQueryHandler(button, pattern="check_sub")
+    )
+
     app.run_polling()
 
 if __name__ == "__main__":
