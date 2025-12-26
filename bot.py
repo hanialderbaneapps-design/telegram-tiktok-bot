@@ -11,7 +11,7 @@ from telegram.ext import (
 TOKEN = os.environ["BOT_TOKEN"]
 CHANNEL = "@professionalXoX"  # t.me/professionalXoX
 
-TIKTOK_RE = re.compile(r"(https?://)?(www\.)?(tiktok\.com|vt\.tiktok\.com)/\\S+", re.IGNORECASE)
+TIKTOK_RE = re.compile(r"(https?://)?(www\.)?(tiktok\.com|vt\.tiktok\.com)/\S+", re.IGNORECASE)
 
 def join_kb():
     return InlineKeyboardMarkup([
